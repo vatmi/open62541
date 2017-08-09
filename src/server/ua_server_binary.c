@@ -283,7 +283,7 @@ processHEL(UA_Server *server, UA_Connection *connection, const UA_ByteString *ms
 /* OPN -> Open up/renew the securechannel */
 static void
 processOPN(UA_Server *server, UA_Connection *connection,
-           UA_UInt32 channelId, const UA_ByteString *msg) {
+           UA_UInt32 channelId, const UA_ByteString *msg, size_t *offset) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
     /* Called before HEL */
     if(connection->state != UA_CONNECTION_ESTABLISHED)
@@ -300,11 +300,11 @@ processOPN(UA_Server *server, UA_Connection *connection,
     UA_SequenceHeader seqHeader;
     UA_NodeId requestType;
     UA_OpenSecureChannelRequest r;
-    size_t offset = 0;
-    retval |= UA_AsymmetricAlgorithmSecurityHeader_decodeBinary(msg, &offset, &asymHeader);
-    retval |= UA_SequenceHeader_decodeBinary(msg, &offset, &seqHeader);
-    retval |= UA_NodeId_decodeBinary(msg, &offset, &requestType);
-    retval |= UA_OpenSecureChannelRequest_decodeBinary(msg, &offset, &r);
+    retval |= UA_AsymmetricAlgorithmSecurityHeader_decodeBinary(msg, offset, &asymHeader);
+    retval |= UA_SequenceHeader_decodeBinary(msg, offset, &seqHeader);
+    retval |= UA_NodeId_decodeBinary(msg, offset, &requestType);
+    retval |= UA_OpenSecureChannelRequest_decodeBinary(msg, offset, &r);
+
 
     /* Error occured */
     if(retval != UA_STATUSCODE_GOOD || requestType.identifier.numeric != 446) {
@@ -612,7 +612,10 @@ UA_Server_processSecureChannelMessage(UA_Server *server, UA_SecureChannel *chann
     case UA_MESSAGETYPE_OPN:
         UA_LOG_TRACE_CHANNEL(server->config.logger, channel,
                              "Process an OPN on an open channel");
-        processOPN(server, channel->connection, channel->securityToken.channelId, message);
+        {
+            size_t offset = 0;
+            processOPN(server, channel->connection, channel->securityToken.channelId, message, &offset);
+        }
         break;
     case UA_MESSAGETYPE_MSG:
         UA_LOG_TRACE_CHANNEL(server->config.logger, channel, "Process a MSG");
@@ -631,13 +634,17 @@ UA_Server_processSecureChannelMessage(UA_Server *server, UA_SecureChannel *chann
 /* Takes the raw message from the network layer */
 static void
 processBinaryMessage(UA_Server *server, UA_Connection *connection,
-                     UA_ByteString *message) {
+                     UA_ByteString *message, size_t *processedLength) {
     UA_LOG_TRACE(server->config.logger, UA_LOGCATEGORY_NETWORK,
                  "Connection %i | Received a packet.", connection->sockfd);
 
     #ifdef UA_DEBUG_DUMP_PKGS
     UA_dump_hex_pkg(message->data, message->length);
     #endif
+
+    if (processedLength) {
+        (*processedLength) = 0;
+    }
 
     UA_Boolean realloced = UA_FALSE;
     UA_StatusCode retval = UA_Connection_completeChunks(connection, message, &realloced);
@@ -668,8 +675,10 @@ processBinaryMessage(UA_Server *server, UA_Connection *connection,
         retval = UA_SecureChannel_processChunks(channel, message,
                       (UA_ProcessMessageCallback*)UA_Server_processSecureChannelMessage, server);
         if(retval != UA_STATUSCODE_GOOD)
-            UA_LOG_TRACE_CHANNEL(server->config.logger, channel, "Procesing chunks "
+            UA_LOG_TRACE_CHANNEL(server->config.logger, channel, "Processing chunks "
                                  "resulted in error code %s", UA_StatusCode_name(retval));
+        else if (processedLength)
+            (*processedLength) = message->length;
     } else {
         /* Process messages without a channel and no chunking */
         UA_LOG_TRACE(server->config.logger, UA_LOGCATEGORY_NETWORK,
@@ -713,7 +722,9 @@ processBinaryMessage(UA_Server *server, UA_Connection *connection,
             UA_ByteString offsetMessage;
             offsetMessage.data = message->data + 12;
             offsetMessage.length = message->length - 12;
-            processOPN(server, connection, channelId, &offsetMessage);
+            offset = 0;
+            processOPN(server, connection, channelId, &offsetMessage, &offset);
+            offset += 12;
             break; }
         case UA_MESSAGETYPE_MSG:
             UA_LOG_TRACE(server->config.logger, UA_LOGCATEGORY_NETWORK,
@@ -732,6 +743,9 @@ processBinaryMessage(UA_Server *server, UA_Connection *connection,
                          "Connection %i | Unknown message type", connection->sockfd);
             connection->close(connection);
         }
+
+        if (processedLength)
+            (*processedLength) = offset;
     }
 
     if(!realloced)
@@ -744,8 +758,8 @@ processBinaryMessage(UA_Server *server, UA_Connection *connection,
 
 void
 UA_Server_processBinaryMessage(UA_Server *server, UA_Connection *connection,
-                               UA_ByteString *message) {
-    processBinaryMessage(server, connection, message);
+                               UA_ByteString *message, size_t *processedLength) {
+    processBinaryMessage(server, connection, message, processedLength);
 }
 
 #else
@@ -757,19 +771,19 @@ typedef struct {
 
 static void
 workerProcessBinaryMessage(UA_Server *server, ConnectionMessage *cm) {
-    processBinaryMessage(server, cm->connection, &cm->message);
+    processBinaryMessage(server, cm->connection, &cm->message, NULL);
     UA_free(cm);
 }
 
 void
 UA_Server_processBinaryMessage(UA_Server *server, UA_Connection *connection,
-                               UA_ByteString *message) {
+                               UA_ByteString *message, size_t *processedLength) {
     /* Allocate the memory for the callback data */
     ConnectionMessage *cm = (ConnectionMessage*)UA_malloc(sizeof(ConnectionMessage));
 
     /* If malloc failed, execute immediately */
     if(!cm) {
-        processBinaryMessage(server, connection, message);
+        processBinaryMessage(server, connection, message, processedLength);
         return;
     }
 

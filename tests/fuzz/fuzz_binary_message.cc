@@ -25,7 +25,27 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return (int)retval;
     memcpy(msg.data, data, size);
 
-    UA_Server_processBinaryMessage(server, &c, &msg);
+    size_t processedLength = 0;
+
+    size_t prevProcessedLength = 0;
+
+    UA_ByteString msgOffset = UA_ByteString();
+    msgOffset.data = msg.data;
+    msgOffset.length = msg.length;
+
+    do {
+        UA_Server_processBinaryMessage(server, &c, &msgOffset, &processedLength);
+        // process any delayed callbacks (e.g. Session close results in a delayed processing callback)
+        UA_Server_run_iterate(server, false);
+        if (processedLength != prevProcessedLength && processedLength < msgOffset.length) {
+            // some data was processed, so cut it off the message
+            msgOffset.data = msgOffset.data + processedLength;
+            msgOffset.length = msgOffset.length - processedLength;
+        } else {
+            break;
+        }
+        prevProcessedLength = processedLength;
+    } while(msgOffset.length > 0);
 	// if we got an invalid chunk, the message is not deleted, so delete it here
     UA_ByteString_deleteMembers(&msg);
     UA_Server_delete(server);

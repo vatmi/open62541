@@ -482,7 +482,7 @@ ServerNetworkLayerTCP_listen(UA_ServerNetworkLayer *nl, UA_Server *server,
 
         if(retval == UA_STATUSCODE_GOOD) {
             /* Process packets */
-            UA_Server_processBinaryMessage(server, &e->connection, &buf);
+            UA_Server_processBinaryMessage(server, &e->connection, &buf, NULL);
         } else if(retval == UA_STATUSCODE_BADCONNECTIONCLOSED) {
             /* The socket is shutdown but not closed */
             if(e->connection.state != UA_CONNECTION_CLOSED) {
