@@ -395,11 +395,13 @@ UA_SecureChannel_processChunks(UA_SecureChannel *channel, const UA_ByteString *c
             break;
 
         /* Is the channel attached to connection? */
+        #if !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
         if(header.secureChannelId != channel->securityToken.channelId) {
             //Service_CloseSecureChannel(server, channel);
             //connection->close(connection);
             return UA_STATUSCODE_BADCOMMUNICATIONERROR;
         }
+        #endif
 
         /* Use requestId = 0 with OPN as argument for the callback */
         UA_SequenceHeader sequenceHeader;
@@ -414,11 +416,13 @@ UA_SecureChannel_processChunks(UA_SecureChannel *channel, const UA_ByteString *c
                 return UA_STATUSCODE_BADCOMMUNICATIONERROR;
 
             /* Does the token match? */
+            #ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
             if(tokenId != channel->securityToken.tokenId) {
                 if(tokenId != channel->nextSecurityToken.tokenId)
                     return UA_STATUSCODE_BADCOMMUNICATIONERROR;
                 UA_SecureChannel_revolveTokens(channel);
             }
+            #endif
 
             /* Does the sequence number match? */
             retval = UA_SecureChannel_processSequenceNumber(channel, sequenceHeader.sequenceNumber);
